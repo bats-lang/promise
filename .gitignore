@@ -1,3 +1,7 @@
-build/
-dist/
-bats_modules/
+*.sats
+*.dats
+*_dats.c
+*.o
+debug/
+release/
+_bats_*
