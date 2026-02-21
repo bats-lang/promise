@@ -4,15 +4,15 @@ Linear async promises for bats. Each promise must be consumed exactly once — t
 type system prevents double-awaits, forgotten promises, and double-resolves.
 
 A promise moves through three states tracked at the type level:
-**Pending → Resolved → Chained**. The `resolver` is a write-once handle
+**Pending -> Resolved -> Chained**. The `resolver` is a write-once handle
 consumed by `resolve`.
 
 ## Types
 
 ```
-datasort PromiseState = Pending | Resolved | Chained
+stadef Pending = 0 / Resolved = 1 / Chained = 2
 
-absvtype promise(a:t@ype, s:PromiseState)
+absvtype promise(a:t@ype, s:int)
 absvtype resolver(a:t@ype)
 ```
 
@@ -30,7 +30,7 @@ $P.create<a>() : @(promise(a, Pending), resolver(a))
 $P.resolved<a>(v: a) : promise(a, Resolved)
 
 (* Lift a value for return inside a then-callback *)
-$P.ret<a>(v: a) : promise(a, Resolved)
+$P.ret<a>(v: a) : promise(a, Chained)
 ```
 
 ### Resolution
@@ -47,18 +47,18 @@ $P.resolve<a>(r: resolver(a), v: a) : void
 $P.extract<a>(p: promise(a, Resolved)) : a
 
 (* Discard a promise in any state without extracting *)
-$P.discard<a>{s:PromiseState}(p: promise(a, s)) : void
+$P.discard<a>{s}(p: promise(a, s)) : void
 
 (* Monadic bind — chain a callback that receives the resolved value *)
-$P.then<a><b>{s:PromiseState}
-  (p: promise(a, s), f: a -<cloptr1> promise(b, s2)) : promise(b, Chained)
+$P.then<a><b>{s}
+  (p: promise(a, s), f: a -<cloptr1> promise(b, Chained)) : promise(b, Chained)
 ```
 
 ### Coercion
 
 ```
 (* Zero-cost coerce Pending to Chained *)
-$P.vow{a:t@ype}(p: promise(a, Pending)) : promise(a, Chained)
+$P.vow{a}(p: promise(a, Pending)) : promise(a, Chained)
 ```
 
 ### Stashing (for host boundary crossing)
@@ -73,7 +73,3 @@ $P.unstash(id: int) : resolver(int)
 (* Convenience: unstash + resolve in one call (no-op if ID is invalid) *)
 $P.fire(id: int, value: int) : void
 ```
-
-## Dependencies
-
-- **array**
