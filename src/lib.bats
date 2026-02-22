@@ -87,6 +87,8 @@ and_then
 
 $UNSAFE begin
 %{#
+#ifndef _PROMISE_RUNTIME_DEFINED
+#define _PROMISE_RUNTIME_DEFINED
 /* Resolver stash -- linear: each slot consumed exactly once */
 #define _PROMISE_MAX_RESOLVERS 128
 static void *_promise_resolver_table[_PROMISE_MAX_RESOLVERS] = {0};
@@ -156,6 +158,7 @@ static void *_promise_cloptr1_invoke(void *clo, void *arg) {
 static void *_promise_cloptr1_wrap(void *clo) {
   return clo;
 }
+#endif
 %}
 end
 
