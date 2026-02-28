@@ -160,7 +160,6 @@ static void *_promise_cloptr1_wrap(void *clo) {
 }
 #endif
 %}
-end
 
 (* ============================================================
    Forward declaration for chain resolution
@@ -403,3 +402,5 @@ fn _test_vow(): void = let
   val () = discard<int>(pc)
   val () = resolve<int>(r, 0)
 in () end
+
+end (* $UNSAFE *)
