@@ -160,7 +160,6 @@ static void *_promise_cloptr1_wrap(void *clo) {
 }
 #endif
 %}
-end
 
 (* ============================================================
    Forward declaration for chain resolution
@@ -225,26 +224,26 @@ end
 implement{a}
 create() = let
   val pv = promise_mk(PState_pending(), the_null_ptr, the_null_ptr, the_null_ptr)
-  val rp = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(pv) end
+  val rp = $UNSAFE.castvwtp1{ptr}(pv)
 in @(pv, rp) end
 
 implement{a}
 resolved(v) =
   promise_mk(PState_resolved(),
-    $UNSAFE begin $UNSAFE.castvwtp0{ptr}(v) end,
+    $UNSAFE.castvwtp0{ptr}(v),
     the_null_ptr, the_null_ptr)
 
 implement{a}
 ret(v) =
   promise_mk(PState_resolved(),
-    $UNSAFE begin $UNSAFE.castvwtp0{ptr}(v) end,
+    $UNSAFE.castvwtp0{ptr}(v),
     the_null_ptr, the_null_ptr)
 
 (* --- Resolution --- *)
 
 implement{a}
 resolve(r, v) = let
-  val vp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(v) end
+  val vp = $UNSAFE.castvwtp0{ptr}(v)
 in
   _resolve_chain(r, vp)
 end
@@ -255,7 +254,7 @@ implement{a}
 extract(p) = let
   val+ ~promise_mk(_, vp, _, _) = p
 in
-  $UNSAFE begin $UNSAFE.castvwtp0{a}(vp) end
+  $UNSAFE.castvwtp0{a}(vp)
 end
 
 implement{a}{s}
@@ -271,7 +270,7 @@ in
   | PState_pending() => let
       val () = state := PState_abandoned()
       prval () = fold@(p)
-      val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(p) end
+      val _ = $UNSAFE.castvwtp0{ptr}(p)
     in end
   | PState_abandoned() => let
       prval () = fold@(p)
@@ -292,9 +291,9 @@ and_then{s}(p, f) = let
     | PState_resolved() => let
         prval () = fold@(p)
         val+ ~promise_mk(_, _, _, _) = p
-        val fp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(f) end
+        val fp = $UNSAFE.castvwtp0{ptr}(f)
         val inner_ptr = $extfcall(ptr, "_promise_cloptr1_invoke", fp, v)
-        val ipv = $UNSAFE begin $UNSAFE.castvwtp0{promise_vt}(inner_ptr) end
+        val ipv = $UNSAFE.castvwtp0{promise_vt}(inner_ptr)
         val+ @promise_mk(inner_st, iv, _, ic) = ipv
         val inner_state = inner_st
       in
@@ -307,45 +306,45 @@ and_then{s}(p, f) = let
             val () = cs := PState_resolved()
             val () = cv := iv_val
             prval () = fold@(chain)
-          in $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end end
+          in $UNSAFE.castvwtp0{ptr}(chain) end
         | PState_pending() => let
-            val chain_ptr = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(chain) end
+            val chain_ptr = $UNSAFE.castvwtp1{ptr}(chain)
             val () = ic := chain_ptr
             prval () = fold@(ipv)
-            val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(ipv) end
-            val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end
+            val _ = $UNSAFE.castvwtp0{ptr}(ipv)
+            val _ = $UNSAFE.castvwtp0{ptr}(chain)
           in chain_ptr end
         | PState_abandoned() => let
-            val chain_ptr = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(chain) end
+            val chain_ptr = $UNSAFE.castvwtp1{ptr}(chain)
             val () = ic := chain_ptr
             prval () = fold@(ipv)
-            val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(ipv) end
-            val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end
+            val _ = $UNSAFE.castvwtp0{ptr}(ipv)
+            val _ = $UNSAFE.castvwtp0{ptr}(chain)
           in chain_ptr end
       end
     | PState_pending() => let
-        val fp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(f) end
+        val fp = $UNSAFE.castvwtp0{ptr}(f)
         val wrapped = $extfcall(ptr, "_promise_cloptr1_wrap", fp)
-        val chain_ptr = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(chain) end
+        val chain_ptr = $UNSAFE.castvwtp1{ptr}(chain)
         val () = cb := wrapped
         val () = chain_field := chain_ptr
         prval () = fold@(p)
-        val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(p) end
-        val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end
+        val _ = $UNSAFE.castvwtp0{ptr}(p)
+        val _ = $UNSAFE.castvwtp0{ptr}(chain)
       in chain_ptr end
     | PState_abandoned() => let
-        val fp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(f) end
+        val fp = $UNSAFE.castvwtp0{ptr}(f)
         val wrapped = $extfcall(ptr, "_promise_cloptr1_wrap", fp)
-        val chain_ptr = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(chain) end
+        val chain_ptr = $UNSAFE.castvwtp1{ptr}(chain)
         val () = cb := wrapped
         val () = chain_field := chain_ptr
         prval () = fold@(p)
-        val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(p) end
-        val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end
+        val _ = $UNSAFE.castvwtp0{ptr}(p)
+        val _ = $UNSAFE.castvwtp0{ptr}(chain)
       in chain_ptr end
   : ptr
 in
-  $UNSAFE begin $UNSAFE.castvwtp0{promise_vt}(result) end
+  $UNSAFE.castvwtp0{promise_vt}(result)
 end
 
 (* --- Stash --- *)
@@ -363,7 +362,7 @@ fire(id, value) = let
   val r = $extfcall(ptr, "_promise_resolver_unstash", id)
 in
   if ptr_isnot_null(r) then
-    _resolve_chain(r, $UNSAFE begin $UNSAFE.cast{ptr}(value) end)
+    _resolve_chain(r, $UNSAFE.cast{ptr}(value))
   else ()
 end
 
@@ -403,3 +402,5 @@ fn _test_vow(): void = let
   val () = discard<int>(pc)
   val () = resolve<int>(r, 0)
 in () end
+
+end (* $UNSAFE *)
