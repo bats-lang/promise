@@ -160,13 +160,16 @@ static void *_promise_cloptr1_wrap(void *clo) {
 }
 #endif
 %}
+end
 
 (* ============================================================
    Forward declaration for chain resolution
    ============================================================ *)
 
+$UNSAFE begin
 extern fun _resolve_chain
   (p: ptr, v: ptr): void = "mac#_resolve_chain"
+end
 
 (* ============================================================
    Implementation
@@ -182,8 +185,10 @@ datatype promise_state_t =
 datavtype promise_vt =
   | promise_mk of (promise_state_t, ptr(*value*), ptr(*cb*), ptr(*chain*))
 
-assume promise(a, s) = promise_vt
-assume resolver(a) = ptr
+$UNSAFE begin
+  assume promise(a, s) = promise_vt
+  assume resolver(a) = ptr
+end
 
 in
 
@@ -191,32 +196,32 @@ in
 
 implement
 _resolve_chain(p, v) = let
-  val state_tag = $extfcall(int, "_promise_get_state_tag", p)
-  val cb_val = $extfcall(ptr, "_promise_get_cb", p)
-  val chain_val = $extfcall(ptr, "_promise_get_chain", p)
+  val state_tag = $UNSAFE begin $extfcall(int, "_promise_get_state_tag", p) end
+  val cb_val = $UNSAFE begin $extfcall(ptr, "_promise_get_cb", p) end
+  val chain_val = $UNSAFE begin $extfcall(ptr, "_promise_get_chain", p) end
 in
   if state_tag = 0 then
-    $extfcall(void, "free", p)
+    $UNSAFE begin $extfcall(void, "free", p) end
   else if ptr_isnot_null(cb_val) then let
-    val () = $extfcall(void, "_promise_set_resolved", p, v)
-    val () = $extfcall(void, "free", p)
-    val inner_ptr = $extfcall(ptr, "_promise_cloptr1_invoke", cb_val, v)
-    val inner_state = $extfcall(int, "_promise_get_state_tag", inner_ptr)
+    val () = $UNSAFE begin $extfcall(void, "_promise_set_resolved", p, v) end
+    val () = $UNSAFE begin $extfcall(void, "free", p) end
+    val inner_ptr = $UNSAFE begin $extfcall(ptr, "_promise_cloptr1_invoke", cb_val, v) end
+    val inner_state = $UNSAFE begin $extfcall(int, "_promise_get_state_tag", inner_ptr) end
   in
     if inner_state = 2 then let
-      val iv = $extfcall(ptr, "_promise_get_value", inner_ptr)
-      val () = $extfcall(void, "free", inner_ptr)
+      val iv = $UNSAFE begin $extfcall(ptr, "_promise_get_value", inner_ptr) end
+      val () = $UNSAFE begin $extfcall(void, "free", inner_ptr) end
     in _resolve_chain(chain_val, iv) end
     else let
-      val () = $extfcall(void, "_promise_set_chain", inner_ptr, chain_val)
+      val () = $UNSAFE begin $extfcall(void, "_promise_set_chain", inner_ptr, chain_val) end
     in end
   end
   else if ptr_isnot_null(chain_val) then let
-    val () = $extfcall(void, "_promise_set_resolved", p, v)
-    val () = $extfcall(void, "free", p)
+    val () = $UNSAFE begin $extfcall(void, "_promise_set_resolved", p, v) end
+    val () = $UNSAFE begin $extfcall(void, "free", p) end
   in _resolve_chain(chain_val, v) end
   else
-    $extfcall(void, "_promise_set_resolved", p, v)
+    $UNSAFE begin $extfcall(void, "_promise_set_resolved", p, v) end
 end
 
 (* --- Creation --- *)
@@ -224,26 +229,32 @@ end
 implement{a}
 create() = let
   val pv = promise_mk(PState_pending(), the_null_ptr, the_null_ptr, the_null_ptr)
-  val rp = $UNSAFE.castvwtp1{ptr}(pv)
+  val rp = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(pv) end
 in @(pv, rp) end
 
 implement{a}
-resolved(v) =
+resolved(v) = let
+  val vp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(v) end
+in
   promise_mk(PState_resolved(),
-    $UNSAFE.castvwtp0{ptr}(v),
+    vp,
     the_null_ptr, the_null_ptr)
+end
 
 implement{a}
-ret(v) =
+ret(v) = let
+  val vp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(v) end
+in
   promise_mk(PState_resolved(),
-    $UNSAFE.castvwtp0{ptr}(v),
+    vp,
     the_null_ptr, the_null_ptr)
+end
 
 (* --- Resolution --- *)
 
 implement{a}
 resolve(r, v) = let
-  val vp = $UNSAFE.castvwtp0{ptr}(v)
+  val vp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(v) end
 in
   _resolve_chain(r, vp)
 end
@@ -254,7 +265,7 @@ implement{a}
 extract(p) = let
   val+ ~promise_mk(_, vp, _, _) = p
 in
-  $UNSAFE.castvwtp0{a}(vp)
+  $UNSAFE begin $UNSAFE.castvwtp0{a}(vp) end
 end
 
 implement{a}{s}
@@ -270,7 +281,7 @@ in
   | PState_pending() => let
       val () = state := PState_abandoned()
       prval () = fold@(p)
-      val _ = $UNSAFE.castvwtp0{ptr}(p)
+      val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(p) end
     in end
   | PState_abandoned() => let
       prval () = fold@(p)
@@ -291,9 +302,9 @@ and_then{s}(p, f) = let
     | PState_resolved() => let
         prval () = fold@(p)
         val+ ~promise_mk(_, _, _, _) = p
-        val fp = $UNSAFE.castvwtp0{ptr}(f)
-        val inner_ptr = $extfcall(ptr, "_promise_cloptr1_invoke", fp, v)
-        val ipv = $UNSAFE.castvwtp0{promise_vt}(inner_ptr)
+        val fp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(f) end
+        val inner_ptr = $UNSAFE begin $extfcall(ptr, "_promise_cloptr1_invoke", fp, v) end
+        val ipv = $UNSAFE begin $UNSAFE.castvwtp0{promise_vt}(inner_ptr) end
         val+ @promise_mk(inner_st, iv, _, ic) = ipv
         val inner_state = inner_st
       in
@@ -306,63 +317,63 @@ and_then{s}(p, f) = let
             val () = cs := PState_resolved()
             val () = cv := iv_val
             prval () = fold@(chain)
-          in $UNSAFE.castvwtp0{ptr}(chain) end
+          in $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end end
         | PState_pending() => let
-            val chain_ptr = $UNSAFE.castvwtp1{ptr}(chain)
+            val chain_ptr = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(chain) end
             val () = ic := chain_ptr
             prval () = fold@(ipv)
-            val _ = $UNSAFE.castvwtp0{ptr}(ipv)
-            val _ = $UNSAFE.castvwtp0{ptr}(chain)
+            val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(ipv) end
+            val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end
           in chain_ptr end
         | PState_abandoned() => let
-            val chain_ptr = $UNSAFE.castvwtp1{ptr}(chain)
+            val chain_ptr = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(chain) end
             val () = ic := chain_ptr
             prval () = fold@(ipv)
-            val _ = $UNSAFE.castvwtp0{ptr}(ipv)
-            val _ = $UNSAFE.castvwtp0{ptr}(chain)
+            val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(ipv) end
+            val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end
           in chain_ptr end
       end
     | PState_pending() => let
-        val fp = $UNSAFE.castvwtp0{ptr}(f)
-        val wrapped = $extfcall(ptr, "_promise_cloptr1_wrap", fp)
-        val chain_ptr = $UNSAFE.castvwtp1{ptr}(chain)
+        val fp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(f) end
+        val wrapped = $UNSAFE begin $extfcall(ptr, "_promise_cloptr1_wrap", fp) end
+        val chain_ptr = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(chain) end
         val () = cb := wrapped
         val () = chain_field := chain_ptr
         prval () = fold@(p)
-        val _ = $UNSAFE.castvwtp0{ptr}(p)
-        val _ = $UNSAFE.castvwtp0{ptr}(chain)
+        val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(p) end
+        val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end
       in chain_ptr end
     | PState_abandoned() => let
-        val fp = $UNSAFE.castvwtp0{ptr}(f)
-        val wrapped = $extfcall(ptr, "_promise_cloptr1_wrap", fp)
-        val chain_ptr = $UNSAFE.castvwtp1{ptr}(chain)
+        val fp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(f) end
+        val wrapped = $UNSAFE begin $extfcall(ptr, "_promise_cloptr1_wrap", fp) end
+        val chain_ptr = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(chain) end
         val () = cb := wrapped
         val () = chain_field := chain_ptr
         prval () = fold@(p)
-        val _ = $UNSAFE.castvwtp0{ptr}(p)
-        val _ = $UNSAFE.castvwtp0{ptr}(chain)
+        val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(p) end
+        val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end
       in chain_ptr end
   : ptr
 in
-  $UNSAFE.castvwtp0{promise_vt}(result)
+  $UNSAFE begin $UNSAFE.castvwtp0{promise_vt}(result) end
 end
 
 (* --- Stash --- *)
 
 implement
-stash(r) = $extfcall(int, "_promise_resolver_stash", r)
+stash(r) = $UNSAFE begin $extfcall(int, "_promise_resolver_stash", r) end
 
 implement
 unstash(id) = let
-  val p = $extfcall(ptr, "_promise_resolver_unstash", id)
+  val p = $UNSAFE begin $extfcall(ptr, "_promise_resolver_unstash", id) end
 in p end
 
 implement
 fire(id, value) = let
-  val r = $extfcall(ptr, "_promise_resolver_unstash", id)
+  val r = $UNSAFE begin $extfcall(ptr, "_promise_resolver_unstash", id) end
 in
   if ptr_isnot_null(r) then
-    _resolve_chain(r, $UNSAFE.cast{ptr}(value))
+    _resolve_chain(r, $UNSAFE begin $UNSAFE.cast{ptr}(value) end)
   else ()
 end
 
@@ -402,5 +413,3 @@ fn _test_vow(): void = let
   val () = discard<int>(pc)
   val () = resolve<int>(r, 0)
 in () end
-
-end (* $UNSAFE *)
