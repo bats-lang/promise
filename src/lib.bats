@@ -18,6 +18,9 @@
 
 #pub absvtype promise(a:t@ype, s:int)
 
+#pub vtypedef promise_pending(a:t@ype) = promise(a, Pending)
+#pub vtypedef promise_resolved(a:t@ype) = promise(a, Resolved)
+
 #pub absvtype resolver(a:t@ype)
 
 (* ============================================================
