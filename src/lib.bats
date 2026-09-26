@@ -82,9 +82,6 @@ and_then
 #pub fun stash
   (r: resolver(Int)): int
 
-#pub fun unstash
-  (id: int): resolver(Int)
-
 #pub fun fire
   (id: int, value: Int): void
 
@@ -373,11 +370,6 @@ end
 
 implement
 stash(r) = $UNSAFE begin $extfcall(int, "_promise_resolver_stash", r) end
-
-implement
-unstash(id) = let
-  val p = $UNSAFE begin $extfcall(ptr, "_promise_resolver_unstash", id) end
-in p end
 
 implement
 fire(id, value) = let
