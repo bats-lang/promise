@@ -67,8 +67,9 @@ and_then
    f: (a) -<cloptr1> promise(b, Chained)
   ): promise(b, Chained)
 
-(* Zero-cost coercion: Pending -> Chained *)
-#pub castfn vow{a:t@ype}
+(* Pending -> Chained. The identity: a promise's state is only in its
+   type (promise(a, s) is one representation for every s). *)
+#pub fn vow {a:t@ype}
   (p: promise(a, Pending)): promise(a, Chained)
 
 (* ============================================================
@@ -294,6 +295,10 @@ in
       val+ ~promise_mk(_, _, _, _) = p
     in end
 end
+
+(* --- State coercion --- *)
+
+implement vow{a}(p) = p
 
 (* --- Monadic bind --- *)
 
