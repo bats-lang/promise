@@ -57,7 +57,7 @@ $P.then<a><b>{s}
 ### Coercion
 
 ```
-(* Zero-cost coerce Pending to Chained *)
+(* Pending to Chained: the identity (the state lives only in the type) *)
 $P.vow{a}(p: promise(a, Pending)) : promise(a, Chained)
 ```
 
