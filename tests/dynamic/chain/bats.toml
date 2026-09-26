@@ -1,0 +1,6 @@
+[package]
+name = "chain"
+kind = "bin"
+
+[dependencies]
+"promise" = ""

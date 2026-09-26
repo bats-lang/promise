@@ -86,93 +86,51 @@ and_then
   (id: int, value: Int): void
 
 (* ============================================================
-   C runtime -- resolver table + promise helpers
+   C runtime -- the stash table JS fires resolvers through
    ============================================================ *)
 
 $UNSAFE begin
 %{#
 #ifndef _PROMISE_RUNTIME_DEFINED
 #define _PROMISE_RUNTIME_DEFINED
-/* Resolver stash -- linear: each slot consumed exactly once */
-#define _PROMISE_MAX_RESOLVERS 128
-static void *_promise_resolver_table[_PROMISE_MAX_RESOLVERS] = {0};
+/* Resolver stash: slot i holds a stashed resolver until it is fired.
+   The table doubles when full, so stash always returns a live id. */
+static void **_promise_resolver_table = 0;
+static int _promise_resolver_cap = 0;
 
 static int _promise_resolver_stash(void *resolver) {
   int i;
-  for (i = 0; i < _PROMISE_MAX_RESOLVERS; i++) {
+  for (i = 0; i < _promise_resolver_cap; i++) {
     if (!_promise_resolver_table[i]) {
       _promise_resolver_table[i] = resolver;
       return i;
     }
   }
-  return -1;
+  {
+    int cap = _promise_resolver_cap ? 2 * _promise_resolver_cap : 16;
+    void **t = (void **)malloc(cap * (int)sizeof(void *));
+    memset(t, 0, cap * sizeof(void *));
+    if (_promise_resolver_cap) {
+      memcpy(t, _promise_resolver_table, _promise_resolver_cap * sizeof(void *));
+      free(_promise_resolver_table);
+    }
+    _promise_resolver_table = t;
+    i = _promise_resolver_cap;
+    _promise_resolver_cap = cap;
+    _promise_resolver_table[i] = resolver;
+    return i;
+  }
 }
 
 static void *_promise_resolver_unstash(int id) {
-  if (id < 0 || id >= _PROMISE_MAX_RESOLVERS) return (void*)0;
-  void *r = _promise_resolver_table[id];
+  void *r;
+  if (id < 0 || id >= _promise_resolver_cap) return (void*)0;
+  r = _promise_resolver_table[id];
   _promise_resolver_table[id] = (void*)0;
   return r;
 }
-
-/* Promise cell field access helpers for _resolve_chain */
-/* promise_mk(state_tag, value, cb, chain) */
-
-static int _promise_get_state_tag(void *p) {
-  int *fields = (int *)p;
-  return fields[0];
-}
-
-static void *_promise_get_value(void *p) {
-  void **fields = (void **)p;
-  return fields[1];
-}
-
-static void *_promise_get_cb(void *p) {
-  void **fields = (void **)p;
-  return fields[2];
-}
-
-static void *_promise_get_chain(void *p) {
-  void **fields = (void **)p;
-  return fields[3];
-}
-
-static void _promise_set_resolved(void *p, void *v) {
-  int *ifields = (int *)p;
-  void **fields = (void **)p;
-  ifields[0] = 2; /* PState_resolved */
-  fields[1] = v;
-}
-
-static void _promise_set_chain(void *p, void *chain) {
-  void **fields = (void **)p;
-  fields[3] = chain;
-}
-
-/* Invoke a linear closure and free it */
-static void *_promise_cloptr1_invoke(void *clo, void *arg) {
-  typedef void *(*clo_fn)(void *, void *);
-  clo_fn f = *(clo_fn *)clo;
-  void *result = f(clo, arg);
-  return result;
-}
-
-/* Wrap a cloptr1 for deferred invocation */
-static void *_promise_cloptr1_wrap(void *clo) {
-  return clo;
-}
 #endif
 %}
-end
-
-(* ============================================================
-   Forward declaration for chain resolution
-   ============================================================ *)
-
-$UNSAFE begin
-extern fun _resolve_chain
-  (p: ptr, v: ptr): void = "mac#_resolve_chain"
 end
 
 (* ============================================================
@@ -181,202 +139,173 @@ end
 
 local
 
-datatype promise_state_t =
-  | PState_abandoned
-  | PState_pending
-  | PState_resolved
+(* What runs when a pending promise's value arrives. *)
+vtypedef cont(a:t@ype) = (a) -<lincloptr1> void
 
-datavtype promise_vt =
-  | promise_mk of (promise_state_t, ptr(*value*), ptr(*cb*), ptr(*chain*))
+(* The cell a pending promise shares with its resolver. refs counts the
+   live handles (2 from create: the promise and the resolver); the last
+   one to let go frees it. value is set by resolve when no continuation
+   waits; cont is set by and_then when no value has arrived. *)
+datavtype cell(a:t@ype) =
+  | CELL of (int, Option_vt(a), Option_vt(cont(a)))
+
+(* A promise either holds its value outright or shares a cell with a
+   resolver. A Pending promise always has a resolver; a Resolved one
+   never does. *)
+datavtype pro(a:t@ype, int) =
+  | {s:int | s != Pending} PVAL(a, s) of (a)
+  | {s:int | s != Resolved} PCELL(a, s) of (cell(a))
 
 $UNSAFE begin
-  assume promise(a, s) = promise_vt
-  assume resolver(a) = ptr
+  assume promise(a, s) = pro(a, s)
+  assume resolver(a) = cell(a)
 end
 
+(* Call a continuation once, then free its closure. *)
+fn{a:t@ype} run_cont(k: cont(a), v: a): void = let
+  val () = k(v)
 in
-
-(* --- Chain resolution --- *)
-
-implement
-_resolve_chain(p, v) = let
-  val state_tag = $UNSAFE begin $extfcall(int, "_promise_get_state_tag", p) end
-  val cb_val = $UNSAFE begin $extfcall(ptr, "_promise_get_cb", p) end
-  val chain_val = $UNSAFE begin $extfcall(ptr, "_promise_get_chain", p) end
-in
-  if state_tag = 0 then
-    $UNSAFE begin $extfcall(void, "free", p) end
-  else if ptr_isnot_null(cb_val) then let
-    val () = $UNSAFE begin $extfcall(void, "_promise_set_resolved", p, v) end
-    val () = $UNSAFE begin $extfcall(void, "free", p) end
-    val inner_ptr = $UNSAFE begin $extfcall(ptr, "_promise_cloptr1_invoke", cb_val, v) end
-    val inner_state = $UNSAFE begin $extfcall(int, "_promise_get_state_tag", inner_ptr) end
-  in
-    if inner_state = 2 then let
-      val iv = $UNSAFE begin $extfcall(ptr, "_promise_get_value", inner_ptr) end
-      val () = $UNSAFE begin $extfcall(void, "free", inner_ptr) end
-    in _resolve_chain(chain_val, iv) end
-    else let
-      val () = $UNSAFE begin $extfcall(void, "_promise_set_chain", inner_ptr, chain_val) end
-    in end
-  end
-  else if ptr_isnot_null(chain_val) then let
-    val () = $UNSAFE begin $extfcall(void, "_promise_set_resolved", p, v) end
-    val () = $UNSAFE begin $extfcall(void, "free", p) end
-  in _resolve_chain(chain_val, v) end
-  else
-    $UNSAFE begin $extfcall(void, "_promise_set_resolved", p, v) end
+  cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(k) end)
 end
+
+fn{a:t@ype} drop_cont(k: Option_vt(cont(a))): void =
+  case+ k of
+  | ~Some_vt(f) => cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end)
+  | ~None_vt() => ()
+
+fn{a:t@ype} drop_value(v: Option_vt(a)): void =
+  case+ v of
+  | ~Some_vt(_) => ()
+  | ~None_vt() => ()
+
+(* Let go of one handle on a cell: free it if it was the last one. *)
+fn{a:t@ype} release(c: cell(a)): void = let
+  val+ @CELL(refs, _, _) = c
+in
+  if refs <= 1 then let
+    prval () = fold@(c)
+    val+ ~CELL(_, v, k) = c
+    val () = drop_value<a>(v)
+  in drop_cont<a>(k) end
+  else let
+    val () = refs := refs - 1
+    prval () = fold@(c)
+    val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(c) end
+  in end
+end
+
+(* Give a cell's promise handle a continuation: run it now if the value
+   is already there, else leave it for resolve. Consumes the handle. *)
+fn{a:t@ype} on_value(c: cell(a), k: cont(a)): void = let
+  val+ @CELL(_, value, old) = c
+  val v = value
+  val () = value := None_vt{a}()
+in
+  case+ v of
+  | ~Some_vt(x) => let
+      prval () = fold@(c)
+      val () = release<a>(c)
+    in run_cont<a>(k, x) end
+  | ~None_vt() => let
+      val o = old
+      val () = old := Some_vt{cont(a)}(k)
+      prval () = fold@(c)
+      val () = drop_cont<a>(o)
+    in release<a>(c) end
+end
+
+(* Resolve r with whatever q settles to. *)
+fn{b:t@ype} forward(q: pro(b, Chained), r: cell(b)): void =
+  case+ q of
+  | ~PVAL(v) => resolve<b>(r, v)
+  | ~PCELL(c) => on_value<b>(c, llam (y: b): void =<lincloptr1> resolve<b>(r, y))
+
+in
 
 (* --- Creation --- *)
 
 implement{a}
 create() = let
-  val pv = promise_mk(PState_pending(), the_null_ptr, the_null_ptr, the_null_ptr)
-  val rp = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(pv) end
-in @(pv, rp) end
+  val c = CELL{a}(2, None_vt{a}(), None_vt{cont(a)}())
+  val r = $UNSAFE begin $UNSAFE.castvwtp1{cell(a)}(c) end
+in @(PCELL(c), r) end
 
 implement{a}
-resolved(v) = let
-  val vp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(v) end
-in
-  promise_mk(PState_resolved(),
-    vp,
-    the_null_ptr, the_null_ptr)
-end
+resolved(v) = PVAL(v)
 
 implement{a}
-ret(v) = let
-  val vp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(v) end
-in
-  promise_mk(PState_resolved(),
-    vp,
-    the_null_ptr, the_null_ptr)
-end
+ret(v) = PVAL(v)
 
 (* --- Resolution --- *)
 
 implement{a}
 resolve(r, v) = let
-  val vp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(v) end
+  val+ @CELL(_, value, k) = r
+  val kk = k
+  val () = k := None_vt{cont(a)}()
 in
-  _resolve_chain(r, vp)
+  case+ kk of
+  | ~Some_vt(f) => let
+      prval () = fold@(r)
+      val () = release<a>(r)
+    in run_cont<a>(f, v) end
+  | ~None_vt() => let
+      val old = value
+      val () = value := Some_vt{a}(v)
+      prval () = fold@(r)
+      val () = drop_value<a>(old)
+    in release<a>(r) end
 end
 
 (* --- Consumption --- *)
 
 implement{a}
 extract(p) = let
-  val+ ~promise_mk(_, vp, _, _) = p
-in
-  $UNSAFE begin $UNSAFE.castvwtp0{a}(vp) end
-end
+  val+ ~PVAL(v) = p
+in v end
 
 implement{a}{s}
-discard(p) = let
-  val+ @promise_mk(state, value, cb, chain) = p
-  val cur_state = state
-in
-  case+ cur_state of
-  | PState_resolved() => let
-      prval () = fold@(p)
-      val+ ~promise_mk(_, _, _, _) = p
-    in end
-  | PState_pending() => let
-      val () = state := PState_abandoned()
-      prval () = fold@(p)
-      val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(p) end
-    in end
-  | PState_abandoned() => let
-      prval () = fold@(p)
-      val+ ~promise_mk(_, _, _, _) = p
-    in end
-end
+discard(p) =
+  case+ p of
+  | ~PVAL(_) => ()
+  | ~PCELL(c) => release<a>(c)
 
 (* --- State coercion --- *)
 
-implement vow{a}(p) = p
+implement vow{a}(p) = let
+  val+ ~PCELL(c) = p
+in PCELL(c) end
 
 (* --- Monadic bind --- *)
 
 implement{a}{b}
-and_then{s}(p, f) = let
-  val chain = promise_mk(PState_pending(), the_null_ptr, the_null_ptr, the_null_ptr)
-  val+ @promise_mk(state, value, cb, chain_field) = p
-  val cur_state = state
-  val v = value
-  val result =
-    case+ cur_state of
-    | PState_resolved() => let
-        prval () = fold@(p)
-        val+ ~promise_mk(_, _, _, _) = p
-        val fp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(f) end
-        val inner_ptr = $UNSAFE begin $extfcall(ptr, "_promise_cloptr1_invoke", fp, v) end
-        val ipv = $UNSAFE begin $UNSAFE.castvwtp0{promise_vt}(inner_ptr) end
-        val+ @promise_mk(inner_st, iv, _, ic) = ipv
-        val inner_state = inner_st
-      in
-        case+ inner_state of
-        | PState_resolved() => let
-            val iv_val = iv
-            prval () = fold@(ipv)
-            val+ ~promise_mk(_, _, _, _) = ipv
-            val+ @promise_mk(cs, cv, _, _) = chain
-            val () = cs := PState_resolved()
-            val () = cv := iv_val
-            prval () = fold@(chain)
-          in $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end end
-        | PState_pending() => let
-            val chain_ptr = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(chain) end
-            val () = ic := chain_ptr
-            prval () = fold@(ipv)
-            val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(ipv) end
-            val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end
-          in chain_ptr end
-        | PState_abandoned() => let
-            val chain_ptr = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(chain) end
-            val () = ic := chain_ptr
-            prval () = fold@(ipv)
-            val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(ipv) end
-            val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end
-          in chain_ptr end
-      end
-    | PState_pending() => let
-        val fp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(f) end
-        val wrapped = $UNSAFE begin $extfcall(ptr, "_promise_cloptr1_wrap", fp) end
-        val chain_ptr = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(chain) end
-        val () = cb := wrapped
-        val () = chain_field := chain_ptr
-        prval () = fold@(p)
-        val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(p) end
-        val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end
-      in chain_ptr end
-    | PState_abandoned() => let
-        val fp = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(f) end
-        val wrapped = $UNSAFE begin $extfcall(ptr, "_promise_cloptr1_wrap", fp) end
-        val chain_ptr = $UNSAFE begin $UNSAFE.castvwtp1{ptr}(chain) end
-        val () = cb := wrapped
-        val () = chain_field := chain_ptr
-        prval () = fold@(p)
-        val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(p) end
-        val _ = $UNSAFE begin $UNSAFE.castvwtp0{ptr}(chain) end
-      in chain_ptr end
-  : ptr
-in
-  $UNSAFE begin $UNSAFE.castvwtp0{promise_vt}(result) end
-end
+and_then{s}(p, f) =
+  case+ p of
+  | ~PVAL(v) => let
+      val q = f(v)
+      val () = cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end)
+    in q end
+  | ~PCELL(c) => let
+      val @(q, r) = create<b>()
+      val () = on_value<a>(c, llam (x: a): void =<lincloptr1> let
+          val inner = f(x)
+          val () = cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end)
+        in forward<b>(inner, r) end)
+    in vow(q) end
 
 (* --- Stash --- *)
 
 implement
-stash(r) = $UNSAFE begin $extfcall(int, "_promise_resolver_stash", r) end
+stash(r) = $UNSAFE begin
+  $extfcall(int, "_promise_resolver_stash", $UNSAFE.castvwtp0{ptr}(r))
+end
 
 implement
 fire(id, value) = let
   val r = $UNSAFE begin $extfcall(ptr, "_promise_resolver_unstash", id) end
 in
   if ptr_isnot_null(r) then
-    _resolve_chain(r, $UNSAFE begin $UNSAFE.cast{ptr}(value) end)
+    resolve<Int>($UNSAFE begin $UNSAFE.castvwtp0{cell(Int)}(r) end, value)
   else ()
 end
 
