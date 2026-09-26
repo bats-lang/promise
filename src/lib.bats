@@ -72,17 +72,20 @@ and_then
   (p: promise(a, Pending)): promise(a, Chained)
 
 (* ============================================================
-   Resolver stash -- stores resolver in table, returns int ID
+   Resolver stash -- stores resolver in table, returns int ID.
+   A stashed resolver is fired from JS, which can send any int, so
+   its value is Int ([v:int] int v): the receiver's own checks then
+   bound it statically, with no cast.
    ============================================================ *)
 
 #pub fun stash
-  (r: resolver(int)): int
+  (r: resolver(Int)): int
 
 #pub fun unstash
-  (id: int): resolver(int)
+  (id: int): resolver(Int)
 
 #pub fun fire
-  (id: int, value: int): void
+  (id: int, value: Int): void
 
 (* ============================================================
    C runtime -- resolver table + promise helpers
@@ -404,10 +407,24 @@ fn _test_create_discard(): void = let
 in () end
 
 fn _test_stash_fire(): void = let
-  val @(p, r) = create<int>()
+  val @(p, r) = create<Int>()
   val id = stash(r)
   val () = fire(id, 7)
-  val () = discard<int>(p)
+  val () = discard<Int>(p)
+in () end
+
+(* A value fired from JS is bounded by the receiver's checks alone *)
+fn _test_fired_value_bounded(): void = let
+  val @(p, r) = create<Int>()
+  val id = stash(r)
+  val q = and_then<Int><int>(p, lam (n) =>
+    if n <= 0 then ret<int>(0)
+    else if n > 1024 then ret<int>(0)
+    else let
+      val m: [k:pos | k <= 1024] int k = n
+    in ret<int>(m) end)
+  val () = fire(id, 5)
+  val () = discard<int>(q)
 in () end
 
 fn _test_vow(): void = let

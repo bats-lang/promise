@@ -63,13 +63,17 @@ $P.vow{a}(p: promise(a, Pending)) : promise(a, Chained)
 
 ### Stashing (for host boundary crossing)
 
+The host (JS) can fire any int, so a stashed resolver carries `Int`
+(`[v:int] int v`). The receiver bounds the value with its own checks,
+with no cast:
+
 ```
 (* Store a resolver in a table, return an integer ID *)
-$P.stash(r: resolver(int)) : int
+$P.stash(r: resolver(Int)) : int
 
 (* Recover a resolver from its ID *)
-$P.unstash(id: int) : resolver(int)
+$P.unstash(id: int) : resolver(Int)
 
 (* Convenience: unstash + resolve in one call (no-op if ID is invalid) *)
-$P.fire(id: int, value: int) : void
+$P.fire(id: int, value: Int) : void
 ```
