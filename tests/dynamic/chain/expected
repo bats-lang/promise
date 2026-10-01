@@ -7,3 +7,6 @@ t4 ok
 t5 2.500000
 t6 12
 t7 77
+t8 pending 8
+t8 resolved 9
+t8 chained 10

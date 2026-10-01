@@ -59,6 +59,12 @@ extract
 discard
   (p: promise(a, s)): void
 
+(* Ends a chain: f receives the value once it arrives (at once when it
+   is already there). Ignoring the value is written out, as lam(_) => (). *)
+#pub fun{a:t@ype} {s:int}
+finish
+  (p: promise(a, s), f: (a) -<cloptr1> void): void
+
 (* Monadic bind *)
 #pub fun{a:t@ype}{b:t@ype}
 and_then
@@ -270,6 +276,16 @@ discard(p) =
   | ~PVAL(_) => ()
   | ~PCELL(c) => release<a>(c)
 
+implement{a}{s}
+finish(p, f) =
+  case+ p of
+  | ~PVAL(v) => let
+      val () = f(v)
+    in cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end) end
+  | ~PCELL(c) => on_value<a>(c, llam (x: a): void =<lincloptr1> let
+      val () = f(x)
+    in cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end) end)
+
 (* --- State coercion --- *)
 
 implement vow{a}(p) = let
@@ -358,4 +374,12 @@ fn _test_vow(): void = let
   val pc : promise(int, Chained) = vow(p)
   val () = discard<int>(pc)
   val () = resolve<int>(r, 0)
+in () end
+
+fn _test_finish(): void = let
+  val @(p, r) = create<int>()
+  val () = finish<int>(p, lam (_) => ())
+  val () = resolve<int>(r, 3)
+  val () = finish<int>(resolved<int>(4), lam (_) => ())
+  val () = finish<int>(and_then<int><int>(ret<int>(1), lam (x) => ret<int>(x + 1)), lam (_) => ())
 in () end

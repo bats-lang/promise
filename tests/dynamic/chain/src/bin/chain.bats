@@ -1,7 +1,7 @@
 (* Every path a value takes through a promise: and_then before and after
    resolve, a continuation that returns a pending promise, a discarded
-   pending promise, a value wider than a pointer, and more resolvers
-   stashed than the table starts with. *)
+   pending promise, a value wider than a pointer, more resolvers
+   stashed than the table starts with, and a chain ended by finish. *)
 
 #include "share/atspre_staload.hats"
 
@@ -63,4 +63,13 @@ implement main0 () = let
   val () = $P.fire(id7, 77)
   val () = $P.fire(id7, 78)
   val () = $P.fire(~1, 0)
+  (* 8: finish before resolve, after resolve, and on a chain *)
+  val @(p8, r8) = $P.create<int>()
+  val () = $P.finish<int>(p8, lam (v) => println! ("t8 pending ", v))
+  val () = $P.resolve<int>(r8, 8)
+  val () = $P.finish<int>($P.resolved<int>(9), lam (v) => println! ("t8 resolved ", v))
+  val @(p9, r9) = $P.create<int>()
+  val () = $P.finish<int>($P.and_then<int><int>(p9, lam (x) => $P.ret<int>(x * 10)),
+    lam (v) => println! ("t8 chained ", v))
+  val () = $P.resolve<int>(r9, 1)
 in () end
