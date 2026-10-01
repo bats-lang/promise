@@ -49,8 +49,12 @@ $P.extract<a>(p: promise(a, Resolved)) : a
 (* Discard a promise in any state without extracting *)
 $P.discard<a>{s}(p: promise(a, s)) : void
 
+(* End a chain: f receives the value when it arrives. Ignoring it is
+   written out, as lam(_) => () *)
+$P.finish<a>{s}(p: promise(a, s), f: a -<cloptr1> void) : void
+
 (* Monadic bind — chain a callback that receives the resolved value *)
-$P.then<a><b>{s}
+$P.and_then<a><b>{s}
   (p: promise(a, s), f: a -<cloptr1> promise(b, Chained)) : promise(b, Chained)
 ```
 
