@@ -13,6 +13,8 @@ consumed by `resolve`.
 stadef Pending = 0 / Resolved = 1 / Chained = 2
 
 absvtype promise(a:t@ype, s:int)
+vtypedef promise_pending(a:t@ype) = promise(a, Pending)
+vtypedef promise_resolved(a:t@ype) = promise(a, Resolved)
 absvtype resolver(a:t@ype)
 ```
 
@@ -29,7 +31,7 @@ $P.create<a>() : @(promise(a, Pending), resolver(a))
 (* Lift a value into an already-resolved promise *)
 $P.resolved<a>(v: a) : promise(a, Resolved)
 
-(* Lift a value for return inside a then-callback *)
+(* Lift a value for return inside an and_then callback *)
 $P.ret<a>(v: a) : promise(a, Chained)
 ```
 
@@ -75,9 +77,7 @@ with no cast:
 (* Store a resolver in a table, return an integer ID *)
 $P.stash(r: resolver(Int)) : int
 
-(* Recover a resolver from its ID *)
-$P.unstash(id: int) : resolver(Int)
-
-(* Convenience: unstash + resolve in one call (no-op if ID is invalid) *)
+(* Resolve the resolver stashed under id with value, and free its slot
+   (no-op when nothing is stashed there) *)
 $P.fire(id: int, value: Int) : void
 ```
