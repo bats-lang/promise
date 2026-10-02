@@ -13,14 +13,15 @@ type implements.
 
 A promise moves through three states tracked at the type level:
 **Pending -> Resolved -> Chained**. The `resolver` is a write-once handle
-consumed by `resolve`.
+consumed by `resolve`. The state is a datasort, not a number: code over
+any state is written `{s:$P.promise_state}`.
 
 ## Types
 
 ```
-stadef Pending = 0 / Resolved = 1 / Chained = 2
+datasort promise_state = Pending | Resolved | Chained
 
-absvtype promise(a:vt@ype, s:int)
+absvtype promise(a:vt@ype, s:promise_state)
 vtypedef promise_pending(a:vt@ype) = promise(a, Pending)
 vtypedef promise_resolved(a:vt@ype) = promise(a, Resolved)
 absvtype resolver(a:vt@ype)

@@ -10,18 +10,21 @@
 #include "share/atspre_staload.hats"
 
 (* ============================================================
-   States (int-indexed to avoid datasort export issues)
+   States
    ============================================================ *)
 
-#pub stadef Pending = 0
-#pub stadef Resolved = 1
-#pub stadef Chained = 2
+(* A promise's state is in its type only: a choice of three, so a
+   function over every state matches all three. *)
+#pub datasort promise_state =
+  | Pending
+  | Resolved
+  | Chained
 
 (* ============================================================
    Types
    ============================================================ *)
 
-#pub absvtype promise(a:vt@ype, s:int)
+#pub absvtype promise(a:vt@ype, s:promise_state)
 
 #pub vtypedef promise_pending(a:vt@ype) = promise(a, Pending)
 #pub vtypedef promise_resolved(a:vt@ype) = promise(a, Resolved)
@@ -74,21 +77,21 @@ extract
 
 (* Lets the promise go: a value already there is disposed; one that
    comes later is disposed when it comes. *)
-#pub fun{a:vt@ype} {s:int}
+#pub fun{a:vt@ype} {s:promise_state}
 discard
   (p: promise(a, s)): void
 
 (* Ends a chain: f receives the value once it arrives (at once when it
    is already there), and must consume it. Ignoring a value with
    nothing to free is written out, as llam (_) => (). *)
-#pub fun{a:vt@ype} {s:int}
+#pub fun{a:vt@ype} {s:promise_state}
 finish
   (p: promise(a, s), f: (a) -<lincloptr1> void): void
 
 (* Monadic bind *)
 #pub fun{a:vt@ype}{b:vt@ype}
 and_then
-  {s:int}
+  {s:promise_state}
   (p: promise(a, s),
    f: (a) -<lincloptr1> promise(b, Chained)
   ): promise(b, Chained)
@@ -187,10 +190,12 @@ datavtype cell(a:vt@ype) =
 
 (* A promise either holds its value outright or shares a cell with a
    resolver. A Pending promise always has a resolver; a Resolved one
-   never does. *)
-datavtype pro(a:vt@ype, int) =
-  | {s:int | s != Pending} PVAL(a, s) of (a, disposer(a))
-  | {s:int | s != Resolved} PCELL(a, s) of (cell(a))
+   never does; a Chained one may be either. *)
+datavtype pro(a:vt@ype, promise_state) =
+  | ResolvedValue(a, Resolved) of (a, disposer(a))
+  | ChainedValue(a, Chained) of (a, disposer(a))
+  | PendingCell(a, Pending) of (cell(a))
+  | ChainedCell(a, Chained) of (cell(a))
 
 $UNSAFE begin
   assume promise(a, s) = pro(a, s)
@@ -254,8 +259,35 @@ end
 (* Resolve r with whatever q settles to. *)
 fn{b:vt@ype} forward(q: pro(b, Chained), r: cell(b)): void =
   case+ q of
-  | ~PVAL(v, _) => resolve<b>(r, v)
-  | ~PCELL(c) => on_value<b>(c, llam (y: b): void =<lincloptr1> resolve<b>(r, y))
+  | ~ChainedValue(v, _) => resolve<b>(r, v)
+  | ~ChainedCell(c) => on_value<b>(c, llam (y: b): void =<lincloptr1> resolve<b>(r, y))
+
+(* Hand a value to the end of a chain, then free the closure. *)
+fn{a:vt@ype} finish_value(v: a, f: (a) -<lincloptr1> void): void = let
+  val () = f(v)
+in cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end) end
+
+(* The end of a chain whose value has not come: f waits in the cell. *)
+fn{a:vt@ype} finish_cell(c: cell(a), f: (a) -<lincloptr1> void): void =
+  on_value<a>(c, llam (x: a): void =<lincloptr1> finish_value<a>(x, f))
+
+(* Bind a value already there: f runs now. *)
+fn{a:vt@ype}{b:vt@ype} bind_value
+  (v: a, f: (a) -<lincloptr1> promise(b, Chained)): promise(b, Chained) = let
+  val q = f(v)
+  val () = cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end)
+in q end
+
+(* Bind a value still to come: f runs when it does, and what it
+   returns settles the new promise. *)
+fn{a:vt@ype}{b:vt@ype} bind_cell
+  (c: cell(a), f: (a) -<lincloptr1> promise(b, Chained)): promise(b, Chained) = let
+  val @(q, r) = create<b>()
+  val () = on_value<a>(c, llam (x: a): void =<lincloptr1> let
+      val inner = f(x)
+      val () = cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end)
+    in forward<b>(inner, r) end)
+in vow(q) end
 
 in
 
@@ -265,13 +297,13 @@ implement{a}
 create() = let
   val c = CELL{a}(2, None_vt{a}(), None_vt{cont(a)}(), dispose<a>)
   val r = $UNSAFE begin $UNSAFE.castvwtp1{cell(a)}(c) end
-in @(PCELL(c), r) end
+in @(PendingCell(c), r) end
 
 implement{a}
-resolved(v) = PVAL(v, dispose<a>)
+resolved(v) = ResolvedValue(v, dispose<a>)
 
 implement{a}
-ret(v) = PVAL(v, dispose<a>)
+ret(v) = ChainedValue(v, dispose<a>)
 
 (* --- Resolution --- *)
 
@@ -299,47 +331,40 @@ end
 
 implement{a}
 extract(p) = let
-  val+ ~PVAL(v, _) = p
+  val+ ~ResolvedValue(v, _) = p
 in v end
 
 implement{a}{s}
 discard(p) =
   case+ p of
-  | ~PVAL(v, free) => free(v)
-  | ~PCELL(c) => release<a>(c)
+  | ~ResolvedValue(v, free) => free(v)
+  | ~ChainedValue(v, free) => free(v)
+  | ~PendingCell(c) => release<a>(c)
+  | ~ChainedCell(c) => release<a>(c)
 
 implement{a}{s}
 finish(p, f) =
   case+ p of
-  | ~PVAL(v, _) => let
-      val () = f(v)
-    in cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end) end
-  | ~PCELL(c) => on_value<a>(c, llam (x: a): void =<lincloptr1> let
-      val () = f(x)
-    in cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end) end)
+  | ~ResolvedValue(v, _) => finish_value<a>(v, f)
+  | ~ChainedValue(v, _) => finish_value<a>(v, f)
+  | ~PendingCell(c) => finish_cell<a>(c, f)
+  | ~ChainedCell(c) => finish_cell<a>(c, f)
 
 (* --- State coercion --- *)
 
 implement vow{a}(p) = let
-  val+ ~PCELL(c) = p
-in PCELL(c) end
+  val+ ~PendingCell(c) = p
+in ChainedCell(c) end
 
 (* --- Monadic bind --- *)
 
 implement{a}{b}
 and_then{s}(p, f) =
   case+ p of
-  | ~PVAL(v, _) => let
-      val q = f(v)
-      val () = cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end)
-    in q end
-  | ~PCELL(c) => let
-      val @(q, r) = create<b>()
-      val () = on_value<a>(c, llam (x: a): void =<lincloptr1> let
-          val inner = f(x)
-          val () = cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end)
-        in forward<b>(inner, r) end)
-    in vow(q) end
+  | ~ResolvedValue(v, _) => bind_value<a><b>(v, f)
+  | ~ChainedValue(v, _) => bind_value<a><b>(v, f)
+  | ~PendingCell(c) => bind_cell<a><b>(c, f)
+  | ~ChainedCell(c) => bind_cell<a><b>(c, f)
 
 (* --- Stash --- *)
 
