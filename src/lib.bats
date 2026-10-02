@@ -1,5 +1,10 @@
 (* promise -- linear async promises for bats *)
-(* Each promise must be consumed exactly once. *)
+(* Each promise must be consumed exactly once, and so is its value: a
+   payload is a vt@ype, so a linear value (a datavtype, a blob) rides a
+   promise and is given to exactly one consumer. A value no consumer
+   takes (the promise discarded before it resolved, or resolved and
+   then discarded) is given to dispose, which each payload type
+   implements; a non-linear payload's dispose does nothing. *)
 (* State machine: Pending -> Resolved -> Chained *)
 
 #include "share/atspre_staload.hats"
@@ -16,26 +21,38 @@
    Types
    ============================================================ *)
 
-#pub absvtype promise(a:t@ype, s:int)
+#pub absvtype promise(a:vt@ype, s:int)
 
-#pub vtypedef promise_pending(a:t@ype) = promise(a, Pending)
-#pub vtypedef promise_resolved(a:t@ype) = promise(a, Resolved)
+#pub vtypedef promise_pending(a:vt@ype) = promise(a, Pending)
+#pub vtypedef promise_resolved(a:vt@ype) = promise(a, Resolved)
 
-#pub absvtype resolver(a:t@ype)
+#pub absvtype resolver(a:vt@ype)
+
+(* Frees a payload no consumer took. Each payload type implements it:
+   nothing for a value with nothing to free (int, Int and bool here),
+   a free for a linear one (a datavtype, a blob). It is read where a
+   value enters a promise (create, resolved, ret) and kept with the
+   promise, so a consumer in another module never needs it. A boxed
+   non-linear value (a datatype with fields) is the one payload these
+   types cannot keep from leaking: its dispose has nothing it may free,
+   and wasm has no garbage collector. Make such a payload a datavtype. *)
+#pub fun{a:vt@ype}
+dispose
+  (v: a): void
 
 (* ============================================================
    Creation
    ============================================================ *)
 
-#pub fun{a:t@ype}
+#pub fun{a:vt@ype}
 create
   (): @(promise(a, Pending), resolver(a))
 
-#pub fun{a:t@ype}
+#pub fun{a:vt@ype}
 resolved
   (v: a): promise(a, Resolved)
 
-#pub fun{a:t@ype}
+#pub fun{a:vt@ype}
 ret
   (v: a): promise(a, Chained)
 
@@ -43,39 +60,42 @@ ret
    Resolution -- consumes the resolver
    ============================================================ *)
 
-#pub fun{a:t@ype}
+#pub fun{a:vt@ype}
 resolve
   (r: resolver(a), v: a): void
 
 (* ============================================================
-   Consumption
+   Consumption -- the promise is linear, so one of these is called
    ============================================================ *)
 
-#pub fun{a:t@ype}
+#pub fun{a:vt@ype}
 extract
   (p: promise(a, Resolved)): a
 
-#pub fun{a:t@ype} {s:int}
+(* Lets the promise go: a value already there is disposed; one that
+   comes later is disposed when it comes. *)
+#pub fun{a:vt@ype} {s:int}
 discard
   (p: promise(a, s)): void
 
 (* Ends a chain: f receives the value once it arrives (at once when it
-   is already there). Ignoring the value is written out, as lam(_) => (). *)
-#pub fun{a:t@ype} {s:int}
+   is already there), and must consume it. Ignoring a value with
+   nothing to free is written out, as llam (_) => (). *)
+#pub fun{a:vt@ype} {s:int}
 finish
-  (p: promise(a, s), f: (a) -<cloptr1> void): void
+  (p: promise(a, s), f: (a) -<lincloptr1> void): void
 
 (* Monadic bind *)
-#pub fun{a:t@ype}{b:t@ype}
+#pub fun{a:vt@ype}{b:vt@ype}
 and_then
   {s:int}
   (p: promise(a, s),
-   f: (a) -<cloptr1> promise(b, Chained)
+   f: (a) -<lincloptr1> promise(b, Chained)
   ): promise(b, Chained)
 
 (* Pending -> Chained. The identity: a promise's state is only in its
    type (promise(a, s) is one representation for every s). *)
-#pub fn vow {a:t@ype}
+#pub fn vow {a:vt@ype}
   (p: promise(a, Pending)): promise(a, Chained)
 
 (* ============================================================
@@ -139,6 +159,12 @@ static void *_promise_resolver_unstash(int id) {
 %}
 end
 
+(* The payloads with nothing to free. A template's implementation must
+   come before its first use in the file. *)
+implement dispose<int>(_) = ()
+implement dispose<Int>(_) = ()
+implement dispose<bool>(_) = ()
+
 (* ============================================================
    Implementation
    ============================================================ *)
@@ -146,20 +172,24 @@ end
 local
 
 (* What runs when a pending promise's value arrives. *)
-vtypedef cont(a:t@ype) = (a) -<lincloptr1> void
+vtypedef cont(a:vt@ype) = (a) -<lincloptr1> void
+
+(* What frees a value nobody took: the payload type's dispose, read
+   where the value enters (so no other module needs the template) *)
+typedef disposer(a:vt@ype) = (a) -> void
 
 (* The cell a pending promise shares with its resolver. refs counts the
    live handles (2 from create: the promise and the resolver); the last
    one to let go frees it. value is set by resolve when no continuation
    waits; cont is set by and_then when no value has arrived. *)
-datavtype cell(a:t@ype) =
-  | CELL of (int, Option_vt(a), Option_vt(cont(a)))
+datavtype cell(a:vt@ype) =
+  | CELL of (int, Option_vt(a), Option_vt(cont(a)), disposer(a))
 
 (* A promise either holds its value outright or shares a cell with a
    resolver. A Pending promise always has a resolver; a Resolved one
    never does. *)
-datavtype pro(a:t@ype, int) =
-  | {s:int | s != Pending} PVAL(a, s) of (a)
+datavtype pro(a:vt@ype, int) =
+  | {s:int | s != Pending} PVAL(a, s) of (a, disposer(a))
   | {s:int | s != Resolved} PCELL(a, s) of (cell(a))
 
 $UNSAFE begin
@@ -168,30 +198,31 @@ $UNSAFE begin
 end
 
 (* Call a continuation once, then free its closure. *)
-fn{a:t@ype} run_cont(k: cont(a), v: a): void = let
+fn{a:vt@ype} run_cont(k: cont(a), v: a): void = let
   val () = k(v)
 in
   cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(k) end)
 end
 
-fn{a:t@ype} drop_cont(k: Option_vt(cont(a))): void =
+fn{a:vt@ype} drop_cont(k: Option_vt(cont(a))): void =
   case+ k of
   | ~Some_vt(f) => cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end)
   | ~None_vt() => ()
 
-fn{a:t@ype} drop_value(v: Option_vt(a)): void =
+(* A value nobody took, freed by its disposer *)
+fn{a:vt@ype} drop_value(v: Option_vt(a), free: disposer(a)): void =
   case+ v of
-  | ~Some_vt(_) => ()
+  | ~Some_vt(x) => free(x)
   | ~None_vt() => ()
 
 (* Let go of one handle on a cell: free it if it was the last one. *)
-fn{a:t@ype} release(c: cell(a)): void = let
-  val+ @CELL(refs, _, _) = c
+fn{a:vt@ype} release(c: cell(a)): void = let
+  val+ @CELL(refs, _, _, _) = c
 in
   if refs <= 1 then let
     prval () = fold@(c)
-    val+ ~CELL(_, v, k) = c
-    val () = drop_value<a>(v)
+    val+ ~CELL(_, v, k, free) = c
+    val () = drop_value<a>(v, free)
   in drop_cont<a>(k) end
   else let
     val () = refs := refs - 1
@@ -202,8 +233,8 @@ end
 
 (* Give a cell's promise handle a continuation: run it now if the value
    is already there, else leave it for resolve. Consumes the handle. *)
-fn{a:t@ype} on_value(c: cell(a), k: cont(a)): void = let
-  val+ @CELL(_, value, old) = c
+fn{a:vt@ype} on_value(c: cell(a), k: cont(a)): void = let
+  val+ @CELL(_, value, old, _) = c
   val v = value
   val () = value := None_vt{a}()
 in
@@ -221,9 +252,9 @@ in
 end
 
 (* Resolve r with whatever q settles to. *)
-fn{b:t@ype} forward(q: pro(b, Chained), r: cell(b)): void =
+fn{b:vt@ype} forward(q: pro(b, Chained), r: cell(b)): void =
   case+ q of
-  | ~PVAL(v) => resolve<b>(r, v)
+  | ~PVAL(v, _) => resolve<b>(r, v)
   | ~PCELL(c) => on_value<b>(c, llam (y: b): void =<lincloptr1> resolve<b>(r, y))
 
 in
@@ -232,23 +263,24 @@ in
 
 implement{a}
 create() = let
-  val c = CELL{a}(2, None_vt{a}(), None_vt{cont(a)}())
+  val c = CELL{a}(2, None_vt{a}(), None_vt{cont(a)}(), dispose<a>)
   val r = $UNSAFE begin $UNSAFE.castvwtp1{cell(a)}(c) end
 in @(PCELL(c), r) end
 
 implement{a}
-resolved(v) = PVAL(v)
+resolved(v) = PVAL(v, dispose<a>)
 
 implement{a}
-ret(v) = PVAL(v)
+ret(v) = PVAL(v, dispose<a>)
 
 (* --- Resolution --- *)
 
 implement{a}
 resolve(r, v) = let
-  val+ @CELL(_, value, k) = r
+  val+ @CELL(_, value, k, free) = r
   val kk = k
   val () = k := None_vt{cont(a)}()
+  val free1 = free
 in
   case+ kk of
   | ~Some_vt(f) => let
@@ -259,7 +291,7 @@ in
       val old = value
       val () = value := Some_vt{a}(v)
       prval () = fold@(r)
-      val () = drop_value<a>(old)
+      val () = drop_value<a>(old, free1)
     in release<a>(r) end
 end
 
@@ -267,19 +299,19 @@ end
 
 implement{a}
 extract(p) = let
-  val+ ~PVAL(v) = p
+  val+ ~PVAL(v, _) = p
 in v end
 
 implement{a}{s}
 discard(p) =
   case+ p of
-  | ~PVAL(_) => ()
+  | ~PVAL(v, free) => free(v)
   | ~PCELL(c) => release<a>(c)
 
 implement{a}{s}
 finish(p, f) =
   case+ p of
-  | ~PVAL(v) => let
+  | ~PVAL(v, _) => let
       val () = f(v)
     in cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end) end
   | ~PCELL(c) => on_value<a>(c, llam (x: a): void =<lincloptr1> let
@@ -297,7 +329,7 @@ in PCELL(c) end
 implement{a}{b}
 and_then{s}(p, f) =
   case+ p of
-  | ~PVAL(v) => let
+  | ~PVAL(v, _) => let
       val q = f(v)
       val () = cloptr_free($UNSAFE begin $UNSAFE.castvwtp0{cloptr0}(f) end)
     in q end
@@ -359,7 +391,7 @@ in () end
 fn _test_fired_value_bounded(): void = let
   val @(p, r) = create<Int>()
   val id = stash(r)
-  val q = and_then<Int><int>(p, lam (n) =>
+  val q = and_then<Int><int>(p, llam (n) =>
     if n <= 0 then ret<int>(0)
     else if n > 1024 then ret<int>(0)
     else let
@@ -378,8 +410,8 @@ in () end
 
 fn _test_finish(): void = let
   val @(p, r) = create<int>()
-  val () = finish<int>(p, lam (_) => ())
+  val () = finish<int>(p, llam (_) => ())
   val () = resolve<int>(r, 3)
-  val () = finish<int>(resolved<int>(4), lam (_) => ())
-  val () = finish<int>(and_then<int><int>(ret<int>(1), lam (x) => ret<int>(x + 1)), lam (_) => ())
+  val () = finish<int>(resolved<int>(4), llam (_) => ())
+  val () = finish<int>(and_then<int><int>(ret<int>(1), llam (x) => ret<int>(x + 1)), llam (_) => ())
 in () end

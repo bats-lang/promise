@@ -7,28 +7,32 @@
 
 #use promise as P
 
+(* A double has nothing to free; promise implements dispose for int,
+   Int and bool only, so a payload type of its own is disposed here *)
+implement $P.dispose<double>(_) = ()
+
 fn show(tag: string, p: $P.promise(int, $P.Chained)): void =
-  $P.discard<int>($P.and_then<int><int>(p, lam (v) => let
+  $P.discard<int>($P.and_then<int><int>(p, llam (v) => let
     val () = println! (tag, " ", v)
   in $P.ret<int>(v) end))
 
 implement main0 () = let
   (* 1: and_then before resolve, two steps *)
   val @(p1, r1) = $P.create<int>()
-  val q1 = $P.and_then<int><int>(p1, lam (x) => $P.ret<int>(x + 1))
+  val q1 = $P.and_then<int><int>(p1, llam (x) => $P.ret<int>(x + 1))
   val () = show("t1", q1)
   val () = $P.resolve<int>(r1, 41)
   (* 2: resolve before and_then *)
   val @(p2, r2) = $P.create<int>()
   val () = $P.resolve<int>(r2, 7)
-  val () = show("t2", $P.and_then<int><int>(p2, lam (x) => $P.ret<int>(x * 2)))
+  val () = show("t2", $P.and_then<int><int>(p2, llam (x) => $P.ret<int>(x * 2)))
   (* 3: continuation returns a pending promise, settled later *)
   val @(p3, r3) = $P.create<int>()
-  val q3 = $P.and_then<int><int>(p3, lam (x) => let
+  val q3 = $P.and_then<int><int>(p3, llam (x) => let
     val @(ip, ir) = $P.create<Int>()
     val id = $P.stash(ir)
     val () = println! ("t3 stashed ", id)
-  in $P.and_then<Int><int>(ip, lam (n) => $P.ret<int>(n + x)) end)
+  in $P.and_then<Int><int>(ip, llam (n) => $P.ret<int>(n + x)) end)
   val () = show("t3", q3)
   val () = $P.resolve<int>(r3, 1)
   val () = println! ("t3 inner pending")
@@ -40,7 +44,7 @@ implement main0 () = let
   val () = println! ("t4 ok")
   (* 5: doubles survive *)
   val @(p5, r5) = $P.create<double>()
-  val q5 = $P.and_then<double><int>(p5, lam (d) => let
+  val q5 = $P.and_then<double><int>(p5, llam (d) => let
     val () = println! ("t5 ", d)
   in $P.ret<int>(0) end)
   val () = $P.discard<int>(q5)
@@ -58,18 +62,18 @@ implement main0 () = let
   val () = loop(40, 0)
   val @(p7, r7) = $P.create<Int>()
   val id7 = $P.stash(r7)
-  val q7 = $P.and_then<Int><int>(p7, lam (n) => let val () = println! ("t7 ", n) in $P.ret<int>(0) end)
+  val q7 = $P.and_then<Int><int>(p7, llam (n) => let val () = println! ("t7 ", n) in $P.ret<int>(0) end)
   val () = $P.discard<int>(q7)
   val () = $P.fire(id7, 77)
   val () = $P.fire(id7, 78)
   val () = $P.fire(~1, 0)
   (* 8: finish before resolve, after resolve, and on a chain *)
   val @(p8, r8) = $P.create<int>()
-  val () = $P.finish<int>(p8, lam (v) => println! ("t8 pending ", v))
+  val () = $P.finish<int>(p8, llam (v) => println! ("t8 pending ", v))
   val () = $P.resolve<int>(r8, 8)
-  val () = $P.finish<int>($P.resolved<int>(9), lam (v) => println! ("t8 resolved ", v))
+  val () = $P.finish<int>($P.resolved<int>(9), llam (v) => println! ("t8 resolved ", v))
   val @(p9, r9) = $P.create<int>()
-  val () = $P.finish<int>($P.and_then<int><int>(p9, lam (x) => $P.ret<int>(x * 10)),
-    lam (v) => println! ("t8 chained ", v))
+  val () = $P.finish<int>($P.and_then<int><int>(p9, llam (x) => $P.ret<int>(x * 10)),
+    llam (v) => println! ("t8 chained ", v))
   val () = $P.resolve<int>(r9, 1)
 in () end
