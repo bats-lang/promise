@@ -1,0 +1,6 @@
+[package]
+name = "dispose"
+kind = "bin"
+
+[dependencies]
+"promise" = ""
