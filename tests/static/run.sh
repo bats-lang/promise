@@ -3,7 +3,7 @@
 # fixture is a snippet put into a copy of this checkout, in the file
 # named in its `file`, before the line equal to its `before`. Each under accept/ must pass
 # `bats check`; each under reject/ must fail it with the message in its
-# `expect`.
+# `expect` (each line of it is a message it may fail with).
 # Last, every match in the source and the fixtures must be case+.
 # usage: tests/static/run.sh <repository-dir>
 set -eu
